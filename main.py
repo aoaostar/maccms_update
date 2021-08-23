@@ -5,6 +5,7 @@ import os
 import shutil
 import stat
 import sys
+import time
 import zipfile
 from concurrent.futures import wait, ALL_COMPLETED, ThreadPoolExecutor
 
@@ -19,6 +20,45 @@ def get_running_path(path=''):
     elif __file__:
         return os.path.dirname(__file__) + path
 
+
+TEMP_PATH = get_running_path('temp')
+BACKUP_PATH = get_running_path('backup')
+##################################################################
+
+# 需要升级的路径
+UPDATE_PATH = [
+    'D:\Workspace\PHP\maccms - 副本',
+]
+# 需要备份的路径
+NEED_BACKUP_PATH = [
+    '/application/data/install/install.lock',
+    '/application/database.php',
+    '/application/extra/',
+    '/template/',
+    '/upload/',
+]
+# 在需要备份的路径中需要跳过的文件
+WITHOU_BACKUP_PATH = [
+    '/application/extra/version.php',
+]
+# 需要安装的插件目录
+PLUGIN_PATH = [
+
+]
+# 下载包的github的仓库
+GITHUB_INFO = {
+    'user': 'magicblack',
+    'repo': 'maccms10',
+}
+# 多线程备份文件的线程数，按自己服务器来，小文件填个几百没问题，单个几个GB的就别了
+BACKUP_MAX_WORKERS = 50
+
+# copy 或者 move
+# move是剪切会快一点，不过move无法重复运行，必须一次到位，中断了得自行去backup文件夹内使用备份文件恢复！
+# copy是拷贝会慢一点，不过copy会保留文件到backup文件夹，保险！推荐使用该方式
+BACKUP_MODE = 'copy'
+
+##################################################################
 
 def get_release_info(user, repo):
     print('正在请求：https://api.github.com/repos/%s/%s/releases/latest' % (user, repo))
@@ -88,6 +128,10 @@ def get_all_file_relative(path):
     return result
 
 
+def backup(src, dict):
+    getattr(shutil, BACKUP_MODE)(src, dict)
+
+
 def recursive_overwrite(src, dist):
     def func(src, dist):
         if os.path.isdir(src):
@@ -95,12 +139,11 @@ def recursive_overwrite(src, dist):
                 os.makedirs(dist)
             files = os.listdir(src)
             for f in files:
-                func(os.path.join(src, f),os.path.join(dist, f))
+                func(os.path.join(src, f), os.path.join(dist, f))
         else:
-            # shutil.copyfile(src, dist)
-            res = executor.submit(shutil.copyfile,src, dist)
+            res = executor.submit(backup, src, dist)
             all_task.append(res)
-            print("复制成功：%s" % dist)
+            print("写入成功：%s" % dist)
 
     with ThreadPoolExecutor(max_workers=BACKUP_MAX_WORKERS) as executor:
         all_task = []
@@ -125,46 +168,16 @@ def over(message=None):
     os._exit(0)
 
 
-TEMP_PATH = get_running_path('temp')
-BACKUP_PATH = get_running_path('backup')
-# 需要升级的路径
-UPDATE_PATH = [
-    'D:\Workspace\PHP\maccms',
-]
-# 需要备份的路径
-NEED_BACKUP_PATH = [
-    '/application/data/install/install.lock',
-    '/application/database.php',
-    '/application/extra/',
-    '/template/',
-    '/upload/',
-]
-# 在需要备份的路径中需要跳过的文件
-WITHOU_BACKUP_PATH = [
-    '/application/extra/version.php',
-]
-# 需要安装的插件目录
-PLUGIN_PATH = [
-
-]
-# 下载包的github的仓库
-GITHUB_INFO = {
-    'user': 'magicblack',
-    'repo': 'maccms10',
-}
-# 多线程备份文件的线程数，按自己服务器来，小文件填个几百没问题，单个几个GB的就别了
-BACKUP_MAX_WORKERS = 15
-
-
 def main(app_path):
     print("当前升级目录：%s" % app_path)
-    backup_path = BACKUP_PATH + os.sep + os.path.basename(app_path)
+    backup_path = BACKUP_PATH + os.path.basename(app_path) + "_%s" % time.strftime("%Y%m%d_%H%M%S")
     # 备份配置文件
     if os.path.exists(backup_path):
         shutil.rmtree(backup_path)
         os.makedirs(backup_path)
     with ThreadPoolExecutor(max_workers=BACKUP_MAX_WORKERS) as executor:
         all_task = []
+
         def func(need_backup_path, without_backup_path, root_path, backup_path, parent_path=''):
             for item in need_backup_path:
 
@@ -175,7 +188,7 @@ def main(app_path):
                     if not os.path.exists(os.path.dirname(backup_path + os.sep + item)):
                         os.makedirs(os.path.dirname(backup_path + os.sep + item))
                     if not os.path.isdir(root_path + item):
-                        shutil.copy(root_path + item, backup_path + os.sep + item)
+                        backup(root_path + item, backup_path + os.sep + item)
                         print("备份成功：%s" % root_path + item)
                     else:
                         list_path = get_all_file_relative(root_path + item)
@@ -184,7 +197,7 @@ def main(app_path):
                                               backup_path + item,
                                               item)
                         all_task.append(res)
-                        # func(list_path, without_backup_path, root_path + item, backup_path + item, item)
+
         func(NEED_BACKUP_PATH, WITHOU_BACKUP_PATH, app_path, backup_path)
         wait(all_task, return_when=ALL_COMPLETED)
     print('备份文件成功！')
